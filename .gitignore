@@ -172,3 +172,9 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# personal info
+data
+
+# edge profile
+src/edge_profile/
