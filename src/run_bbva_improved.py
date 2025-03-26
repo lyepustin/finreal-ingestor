@@ -22,12 +22,33 @@ def signal_handler(signum, frame):
     logger.info("Received interrupt signal. Force quitting...")
     sys.exit(0)
 
-def display_transactions(transactions):
+def display_transactions(transactions, source: str):
     """Display transactions in a formatted way"""
     if transactions:
-        logger.info(f"Captured {len(transactions)} transactions:")
+        logger.info(f"\nCaptured {len(transactions)} {source} transactions:")
+        # Print header
+        if source == "bank_account":
+            logger.info("   Date/Time     |   Amount   |     Balance    |    Category         | Description")
+            logger.info("-" * 90)
+        else:
+            logger.info("   Date/Time     |   Amount   |    Category         | Description")
+            logger.info("-" * 80)
+            
         for tx in transactions:
-            logger.info(f"- {tx.description}: {tx.amount}€ ({tx.date})")
+            # Format amount with sign and 2 decimal places
+            amount_str = f"{tx.amount:+.2f}€"
+            # Add color coding: red for negative, green for positive amounts
+            if tx.amount < 0:
+                amount_str = f"\033[91m{amount_str}\033[0m"  # Red
+            else:
+                amount_str = f"\033[92m{amount_str}\033[0m"  # Green
+            
+            if source == "bank_account":
+                # Format balance with thousands separator and 2 decimal places
+                balance_str = f"{tx.balance:,.2f}€"
+                logger.info(f"{tx.date.strftime('%Y-%m-%d %H:%M')} | {amount_str:>10} | {balance_str:>13} | {tx.category:<18} | {tx.description}")
+            else:
+                logger.info(f"{tx.date.strftime('%Y-%m-%d %H:%M')} | {amount_str:>10} | {tx.category:<18} | {tx.description}")
 
 def display_financial_overview(overview):
     """Display financial overview in a formatted way"""
@@ -35,8 +56,8 @@ def display_financial_overview(overview):
         logger.info("\nAccounts:")
         for account in overview["accounts"]:
             logger.info(f"- {account.account_type} ({account.account_number})")
-            logger.info(f"  Available: {account.available_balance}€")
-            logger.info(f"  Current: {account.current_balance}€")
+            logger.info(f"  Available: {account.available_balance:,.2f}€")
+            logger.info(f"  Current: {account.current_balance:,.2f}€")
     
     if overview["cards"]:
         logger.info("\nCards:")
@@ -44,7 +65,7 @@ def display_financial_overview(overview):
             logger.info(f"- {card.type} ({card.card_number})")
             logger.info(f"  Alias: {card.alias}")
             logger.info(f"  Status: {card.status}")
-            logger.info(f"  Available: {card.available_balance}€")
+            logger.info(f"  Available: {card.available_balance:,.2f}€")
 
 def main():
     # Set up signal handlers
@@ -69,13 +90,18 @@ def main():
                 if overview["accounts"] or overview["cards"]:
                     display_financial_overview(overview)
                    
-                logger.info("Navigate to your virtual card transactions and financial overview pages to capture data") 
+                logger.info("Navigate to your bank account and virtual card transactions pages to capture data") 
                 # Keep the browser open and monitor for data
                 while True:
-                    # Check for transactions
-                    transactions = scraper.get_transactions()
-                    if transactions:
-                        display_transactions(transactions)
+                    # Check for bank account transactions
+                    bank_transactions = scraper.get_bank_account_transactions()
+                    if bank_transactions:
+                        display_transactions(bank_transactions, "bank_account")
+                    
+                    # Check for virtual card transactions
+                    virtual_transactions = scraper.get_virtual_card_transactions()
+                    if virtual_transactions:
+                        display_transactions(virtual_transactions, "virtual_card")
                     
                     # Clear processed data
                     scraper.clear_data()

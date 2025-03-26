@@ -36,6 +36,8 @@ class Transaction:
     description: str
     category: str
     amount: float
+    source: str = "unknown"  # Added source field to distinguish between bank and virtual card
+    balance: float = 0.0  # Added balance field for bank account transactions
 
 @dataclass
 class AccountBalance:
@@ -63,8 +65,8 @@ class ResponseHandler:
         """Process the response data and return structured information"""
         raise NotImplementedError
 
-class TransactionResponseHandler(ResponseHandler):
-    """Handler for transaction responses"""
+class VirtualCardTransactionHandler(ResponseHandler):
+    """Handler for virtual card transaction responses"""
     def process(self, response_data: Dict[str, Any]) -> List[Transaction]:
         transactions = []
         try:
@@ -74,14 +76,41 @@ class TransactionResponseHandler(ResponseHandler):
                         date=datetime.fromisoformat(tx["transactionDate"].replace("Z", "+00:00")),
                         description=tx["shop"]["name"].title(),
                         category=tx["humanCategory"]["name"],
-                        amount=float(tx["amount"]["amount"])
+                        amount=float(tx["amount"]["amount"]),
+                        source="virtual_card"
                     )
                     transactions.append(transaction)
                 except Exception as e:
-                    logger.warning(f"Failed to process transaction: {str(e)}")
+                    logger.warning(f"Failed to process virtual card transaction: {str(e)}")
                     continue
         except Exception as e:
-            logger.error(f"Error processing transactions: {str(e)}")
+            logger.error(f"Error processing virtual card transactions: {str(e)}")
+        return transactions
+
+class BankAccountTransactionHandler(ResponseHandler):
+    """Handler for bank account transaction responses"""
+    def process(self, response_data: Dict[str, Any]) -> List[Transaction]:
+        transactions = []
+        try:
+            for tx in response_data.get("accountTransactions", []):
+                try:
+                    # Extract balance from the transaction
+                    balance = float(tx.get("balance", {}).get("accountingBalance", {}).get("amount", 0))
+                    
+                    transaction = Transaction(
+                        date=datetime.fromisoformat(tx["transactionDate"].replace("Z", "+00:00")),
+                        description=tx["extendedName"].strip(),
+                        category=tx.get("humanCategory", {}).get("name", "Uncategorized"),
+                        amount=float(tx["amount"]["amount"]),
+                        source="bank_account",
+                        balance=balance
+                    )
+                    transactions.append(transaction)
+                except Exception as e:
+                    logger.warning(f"Failed to process bank account transaction: {str(e)}")
+                    continue
+        except Exception as e:
+            logger.error(f"Error processing bank account transactions: {str(e)}")
         return transactions
 
 class FinancialOverviewHandler(ResponseHandler):
@@ -142,12 +171,14 @@ class BBVAScraperImproved:
         
         # Initialize response handlers
         self.response_handlers = {
-            "listIntegratedCardTransactions": TransactionResponseHandler(),
-            "financial-overview": FinancialOverviewHandler()
+            "listIntegratedCardTransactions": VirtualCardTransactionHandler(),
+            "financial-overview": FinancialOverviewHandler(),
+            "accountTransactions": BankAccountTransactionHandler()
         }
         
         # Store captured data
-        self.transactions: List[Transaction] = []
+        self.virtual_card_transactions: List[Transaction] = []
+        self.bank_account_transactions: List[Transaction] = []
         self.financial_overview: Dict[str, List[Any]] = {
             "accounts": [],
             "cards": []
@@ -174,8 +205,13 @@ class BBVAScraperImproved:
                     # Determine response type and process accordingly
                     if "cardsTransactions" in response_data:
                         handler = self.response_handlers["listIntegratedCardTransactions"]
-                        self.transactions = handler.process(response_data)
-                        logger.info(f"Processed {len(self.transactions)} transactions")
+                        self.virtual_card_transactions = handler.process(response_data)
+                        logger.info(f"Processed {len(self.virtual_card_transactions)} virtual card transactions")
+                    
+                    elif "accountTransactions" in response_data:
+                        handler = self.response_handlers["accountTransactions"]
+                        self.bank_account_transactions = handler.process(response_data)
+                        logger.info(f"Processed {len(self.bank_account_transactions)} bank account transactions")
                     
                     elif "data" in response_data and "contracts" in response_data["data"]:
                         handler = self.response_handlers["financial-overview"]
@@ -194,6 +230,14 @@ class BBVAScraperImproved:
                 # Check for different types of responses
                 if "listIntegratedCardTransactions" in url:
                     logger.info("Detected virtual card transactions response")
+                    request_id = msg["params"]["requestId"]
+                    ws.send(json.dumps({
+                        "id": 999,
+                        "method": "Network.getResponseBody",
+                        "params": {"requestId": request_id}
+                    }))
+                elif "accountTransactions" in url:
+                    logger.info("Detected bank account transactions response")
                     request_id = msg["params"]["requestId"]
                     ws.send(json.dumps({
                         "id": 999,
@@ -272,9 +316,13 @@ class BBVAScraperImproved:
         )
         logger.info("Edge WebDriver and WebSocket setup completed")
 
-    def get_transactions(self) -> List[Transaction]:
-        """Get the list of transactions captured by the WebSocket"""
-        return self.transactions
+    def get_virtual_card_transactions(self) -> List[Transaction]:
+        """Get the list of virtual card transactions captured by the WebSocket"""
+        return self.virtual_card_transactions
+
+    def get_bank_account_transactions(self) -> List[Transaction]:
+        """Get the list of bank account transactions captured by the WebSocket"""
+        return self.bank_account_transactions
 
     def get_financial_overview(self) -> Dict[str, List[Any]]:
         """Get the financial overview data"""
@@ -282,7 +330,8 @@ class BBVAScraperImproved:
 
     def clear_data(self):
         """Clear all captured data"""
-        self.transactions = []
+        self.virtual_card_transactions = []
+        self.bank_account_transactions = []
         self.financial_overview = {
             "accounts": [],
             "cards": []
