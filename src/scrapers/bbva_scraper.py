@@ -344,12 +344,171 @@ class BBVAScraperImproved:
         if self.driver:
             self.driver.quit()
 
+    def export_transactions_to_csv(self) -> bool:
+        """Export transactions to CSV files for each account"""
+        try:
+            logger.info("Starting CSV export process")
+            
+            # Create data/exports directory if it doesn't exist
+            os.makedirs("data/exports", exist_ok=True)
+            
+            # Get current timestamp for filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # Process each account's transactions
+            for account in self.financial_overview["accounts"]:
+                try:
+                    # Create filename
+                    account_name = "cuentas_personales"  # Default name
+                    if "pau" in account.account_type.lower():
+                        account_name = "pau"
+                    
+                    filename = f"{timestamp}_bbva_{account_name}_{account.account_number}.csv"
+                    filepath = os.path.join("data/exports", filename)
+                    
+                    # Filter transactions for this account
+                    account_transactions = [
+                        tx for tx in self.bank_account_transactions
+                        if tx.source == "bank_account"
+                    ]
+                    
+                    # Sort transactions by date (newest first)
+                    account_transactions.sort(key=lambda x: x.date, reverse=True)
+                    
+                    # Write to CSV
+                    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                        import csv
+                        writer = csv.writer(f)
+                        writer.writerow(['date', 'description', 'category', 'amount', 'balance'])
+                        
+                        for tx in account_transactions:
+                            writer.writerow([
+                                tx.date.strftime("%Y-%m-%d %H:%M:%S"),
+                                tx.description,
+                                tx.category,
+                                tx.amount,
+                                tx.balance
+                            ])
+                    
+                    logger.info(f"Successfully exported transactions to {filename}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to export transactions for account {account.account_number}: {str(e)}")
+                    continue
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to export transactions to CSV: {str(e)}")
+            return False
+
     def __enter__(self):
         self.setup_driver()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+    def click_accounts_overview(self) -> bool:
+        """Navigate to accounts and cards overview page"""
+        try:
+            logger.info("Navigating to accounts overview page")
+            self.driver.get("https://web.bbva.es/index.html#subhome-cuentas-tarjetas")
+            
+            # Wait for the accounts section to load
+            logger.info("Waiting for accounts section to load")
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.ID, "cuentasTarjetasProductos"))
+            )
+            
+            logger.info("Successfully loaded accounts overview page")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to load accounts overview page: {str(e)}")
+            return False
+
+    def click_bank_transactions(self) -> bool:
+        """Click on the first bank account row to view transactions"""
+        try:
+            logger.info("Waiting for first account row to be clickable")
+            # Find the first account row
+            account_row = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.CSS_SELECTOR, "tr.filaCuentasIban"))
+            )
+            
+            logger.info("Found account row, attempting to click")
+            # Try multiple click methods
+            try:
+                # Scroll into view first
+                self.driver.execute_script("arguments[0].scrollIntoView(true);", account_row)
+                time.sleep(0.5)
+                
+                # Try JavaScript click
+                self.driver.execute_script("arguments[0].click();", account_row)
+            except Exception as e:
+                logger.warning(f"JavaScript click failed: {str(e)}, trying regular click")
+                try:
+                    account_row.click()
+                except Exception as e:
+                    logger.warning(f"Regular click failed: {str(e)}, trying action chains")
+                    from selenium.webdriver.common.action_chains import ActionChains
+                    actions = ActionChains(self.driver)
+                    actions.move_to_element(account_row).click().perform()
+            
+            # Wait for the transactions page to load
+            logger.info("Waiting for transactions page to load")
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "c-tablas-producto"))
+            )
+            
+            logger.info("Successfully clicked account row")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to click account row: {str(e)}")
+            return False
+
+    def click_virtual_card_transactions(self) -> bool:
+        """Click on the virtual card transactions row"""
+        try:
+            logger.info("Waiting for virtual card row to be clickable")
+            # Find the virtual card row by looking for the text "TARJETAS VIRTUALES"
+            virtual_card_row = WebDriverWait(self.driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//span[contains(@class, 'nombreComercial') and contains(text(), 'TARJETAS VIRTUALES')]/ancestor::tr"))
+            )
+            
+            logger.info("Found virtual card row, attempting to click")
+            # Try multiple click methods
+            try:
+                # Scroll into view first
+                self.driver.execute_script("arguments[0].scrollIntoView(true);", virtual_card_row)
+                time.sleep(0.5)
+                
+                # Try JavaScript click
+                self.driver.execute_script("arguments[0].click();", virtual_card_row)
+            except Exception as e:
+                logger.warning(f"JavaScript click failed: {str(e)}, trying regular click")
+                try:
+                    virtual_card_row.click()
+                except Exception as e:
+                    logger.warning(f"Regular click failed: {str(e)}, trying action chains")
+                    from selenium.webdriver.common.action_chains import ActionChains
+                    actions = ActionChains(self.driver)
+                    actions.move_to_element(virtual_card_row).click().perform()
+            
+            # Wait for the transactions page to load
+            logger.info("Waiting for transactions page to load")
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CLASS_NAME, "c-tablas-producto"))
+            )
+            
+            logger.info("Successfully clicked virtual card row")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to click virtual card row: {str(e)}")
+            return False
 
     def login(self) -> bool:
         """Login to BBVA banking portal"""
