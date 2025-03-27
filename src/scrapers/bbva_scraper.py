@@ -2,18 +2,15 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.edge.service import Service
 from selenium.webdriver.edge.options import Options
 from selenium.common.exceptions import TimeoutException
 import logging
-import sys
 import os
 from typing import Optional, List, Dict, Any
 import time
 import json
 import websocket
 import requests
-from queue import Queue
 from threading import Event
 from dotenv import load_dotenv
 from dataclasses import dataclass
@@ -94,12 +91,12 @@ class BankAccountTransactionHandler(ResponseHandler):
         try:
             for tx in response_data.get("accountTransactions", []):
                 try:
-                    # Extract balance from the transaction
+                    # extract balance from the transaction
                     balance = float(tx.get("balance", {}).get("accountingBalance", {}).get("amount", 0))
                     
                     transaction = Transaction(
                         date=datetime.fromisoformat(tx["transactionDate"].replace("Z", "+00:00")),
-                        description=tx["extendedName"].strip(),
+                        description=tx.get("humanConceptName", "").strip(),
                         category=tx.get("humanCategory", {}).get("name", "Uncategorized"),
                         amount=float(tx["amount"]["amount"]),
                         source="bank_account",
@@ -107,10 +104,10 @@ class BankAccountTransactionHandler(ResponseHandler):
                     )
                     transactions.append(transaction)
                 except Exception as e:
-                    logger.warning(f"Failed to process bank account transaction: {str(e)}")
+                    logger.warning(f"Failed to process bank account transaction: {e}")
                     continue
         except Exception as e:
-            logger.error(f"Error processing bank account transactions: {str(e)}")
+            logger.error(f"Error processing bank account transactions: {e}")
         return transactions
 
 class FinancialOverviewHandler(ResponseHandler):
@@ -120,10 +117,8 @@ class FinancialOverviewHandler(ResponseHandler):
             "accounts": [],
             "cards": []
         }
-        
         try:
-            # Process accounts
-            for contract in response_data.get("data", {}).get("contracts", []):
+            for contract in response_data.get("data", {}).get("contracts", []):               
                 if contract.get("productType") == "ACCOUNT":
                     try:
                         account = AccountBalance(
@@ -138,7 +133,7 @@ class FinancialOverviewHandler(ResponseHandler):
                         continue
 
                 # Process cards
-                elif contract.get("productType") == "CARD":
+                elif contract.get("productType") == "CARD" and contract.get("product", {}).get("name", "") == "TARJETAS VIRTUALES":
                     try:
                         card = CardInfo(
                             card_number=contract.get("number", ""),
@@ -285,13 +280,33 @@ class BBVAScraperImproved:
         
         self.driver = webdriver.Edge(options=edge_options)
         
+        # Create a new tab and switch to it
+        logger.info("Creating new tab")
+        self.driver.switch_to.new_window('tab')
+        
+        # Get the current window handle (this will be our new tab)
+        current_handle = self.driver.current_window_handle
+        logger.info(f"New tab created with handle: {current_handle}")
+        
         # Initialize WebSocket connection
         try:
             debugger_url = "http://localhost:59222/json"
             targets = requests.get(debugger_url).json()
-            ws_url = targets[0]["webSocketDebuggerUrl"]
             
+            # Find the page/tab that matches our current window handle
+            target_page = None
+            for target in targets:
+                if target.get("id") == current_handle:
+                    target_page = target
+                    break
+            
+            if not target_page:
+                logger.error(f"Could not find WebSocket debugger URL for tab handle: {current_handle}")
+                raise Exception("Failed to find WebSocket debugger URL for new tab")
+            
+            ws_url = target_page["webSocketDebuggerUrl"]
             logger.info(f"Connecting WebSocket to: {ws_url}")
+            
             self.ws = websocket.WebSocketApp(
                 ws_url,
                 on_message=self._on_ws_message,
@@ -310,6 +325,7 @@ class BBVAScraperImproved:
             
         except Exception as e:
             logger.error(f"Failed to initialize WebSocket: {str(e)}")
+            raise  # Re-raise the exception to handle it in the calling code
         
         WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -345,7 +361,7 @@ class BBVAScraperImproved:
             self.driver.quit()
 
     def export_transactions_to_csv(self) -> bool:
-        """Export transactions to CSV files for each account"""
+        """Export transactions to CSV files for each account and virtual card"""
         try:
             logger.info("Starting CSV export process")
             
@@ -394,6 +410,43 @@ class BBVAScraperImproved:
                     
                 except Exception as e:
                     logger.error(f"Failed to export transactions for account {account.account_number}: {str(e)}")
+                    continue
+
+            # Process virtual card transactions
+            for card in self.financial_overview["cards"]:
+                try:
+                    # Create filename for virtual card
+                    filename = f"{timestamp}_bbva_virtual_card_{card.card_number}.csv"
+                    filepath = os.path.join("data/exports", filename)
+                    
+                    # Filter transactions for this virtual card
+                    card_transactions = [
+                        tx for tx in self.virtual_card_transactions
+                        if tx.source == "virtual_card"
+                    ]
+                    
+                    # Sort transactions by date (newest first)
+                    card_transactions.sort(key=lambda x: x.date, reverse=True)
+                    
+                    # Write to CSV
+                    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                        import csv
+                        writer = csv.writer(f)
+                        writer.writerow(['date', 'description', 'category', 'amount', 'balance'])
+                        
+                        for tx in card_transactions:
+                            writer.writerow([
+                                tx.date.strftime("%Y-%m-%d %H:%M:%S"),
+                                tx.description,
+                                tx.category,
+                                tx.amount,
+                                ""  # Empty balance for virtual card transactions
+                            ])
+                    
+                    logger.info(f"Successfully exported virtual card transactions to {filename}")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to export transactions for virtual card {card.card_number}: {str(e)}")
                     continue
             
             return True
@@ -500,7 +553,7 @@ class BBVAScraperImproved:
             # Wait for the transactions page to load
             logger.info("Waiting for transactions page to load")
             WebDriverWait(self.driver, 10).until(
-                EC.presence_of_element_located((By.CLASS_NAME, "c-tablas-producto"))
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='cards-main-transactions']"))
             )
             
             logger.info("Successfully clicked virtual card row")
