@@ -63,6 +63,13 @@ To delete all transactions and categories for the configured user:
 python src/run_transaction_cleaner.py
 ```
 
+To delete only 2025 transactions:
+```bash
+python src/run_transaction_cleaner_with_options.py --only-2025
+```
+
+The transaction cleaner uses SQL optimization to delete records efficiently in a single operation rather than batch processing. This makes the deletion process significantly faster and more reliable.
+
 ## Database Schema
 
 The system uses the following main tables:

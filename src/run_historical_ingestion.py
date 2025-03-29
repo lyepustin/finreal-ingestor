@@ -2,7 +2,7 @@ import os
 import logging
 from pathlib import Path
 from datetime import datetime
-from db.transaction_ingester import TransactionIngester
+from db.historical_transaction_ingester import HistoricalTransactionIngester
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -76,8 +76,8 @@ def process_historical_files():
     if not csv_dir.exists():
         raise ValueError(f"CSV directory not found: {csv_dir}")
     
-    # Initialize ingester
-    ingester = TransactionIngester()
+    # Initialize historical ingester
+    ingester = HistoricalTransactionIngester()
     logger = logging.getLogger(__name__)
     
     success_count = 0
