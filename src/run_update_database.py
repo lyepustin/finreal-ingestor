@@ -28,12 +28,12 @@ def setup_logger():
     logger.addHandler(console_handler)
 
 def get_latest_files_by_bank(exports_dir):
-    """Get the most recent file for each bank from the exports directory"""
+    """Get the most recent file for each bank and account type from the exports directory"""
     exports_path = Path(exports_dir)
     if not exports_path.exists():
         raise ValueError(f"Exports directory not found: {exports_dir}")
     
-    # Dictionary to store latest files by bank
+    # Dictionary to store latest files by bank and account type
     latest_files = {}
     
     # Process all CSV files
@@ -50,13 +50,24 @@ def get_latest_files_by_bank(exports_dir):
                 bank = "ruralvia"
             else:
                 continue
+            
+            # Determine account type
+            if "virtual_card" in filename.lower() or "tarjeta_virtual" in filename.lower():
+                account_type = "virtual"
+            else:
+                account_type = "regular"
+            
+            # Create a unique key for each bank and account type combination
+            key = f"{bank}_{account_type}"
                 
             # Update latest file if this one is newer
-            if bank not in latest_files or timestamp > latest_files[bank]["timestamp"]:
-                latest_files[bank] = {
+            if key not in latest_files or timestamp > latest_files[key]["timestamp"]:
+                latest_files[key] = {
                     "file": str(file_path),
                     "timestamp": timestamp,
-                    "filename": filename
+                    "filename": filename,
+                    "bank": bank,
+                    "account_type": account_type
                 }
         except ValueError:
             continue
@@ -118,21 +129,21 @@ def process_account_files():
     success_count = 0
     total_count = len(latest_files)
     
-    for bank, file_info in latest_files.items():
+    for bank_account_key, file_info in latest_files.items():
         try:
-            account_config = get_account_config(bank, file_info["file"])
+            account_config = get_account_config(file_info["bank"], file_info["file"])
             if not account_config:
                 logger.warning(f"No account configuration found for {file_info['filename']}")
                 continue
                 
-            logger.info(f"Processing {file_info['filename']} for {account_config['account_number']}")
+            logger.info(f"Processing {file_info['filename']} for {account_config['account_number']} ({file_info['account_type']})")
             ingester.ingest_transactions(
                 csv_path=file_info["file"],
                 account_number=account_config["account_number"],
                 bank_id=account_config["bank_id"],
                 account_id=account_config["account_id"]
             )
-            logger.info(f"Successfully processed {account_config['account_number']}")
+            logger.info(f"Successfully processed {account_config['account_number']} ({file_info['account_type']})")
             success_count += 1
             
         except ValueError as ve:

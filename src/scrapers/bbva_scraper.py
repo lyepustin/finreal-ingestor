@@ -35,6 +35,7 @@ class Transaction:
     amount: float
     source: str = "unknown"  # Added source field to distinguish between bank and virtual card
     balance: float = 0.0  # Added balance field for bank account transactions
+    more_info: str = ""  # Added more info field for extended description
 
 @dataclass
 class AccountBalance:
@@ -69,16 +70,54 @@ class VirtualCardTransactionHandler(ResponseHandler):
         try:
             for tx in response_data.get("cardsTransactions", []):
                 try:
+                    # Get category name or use default if missing
+                    category = "Uncategorized"
+                    if "humanCategory" in tx and tx["humanCategory"] is not None:
+                        category = tx["humanCategory"].get("name", "Uncategorized")
+                    
+                    # Get shop name or default value
+                    description = "Unknown transaction"
+                    if "shop" in tx and tx["shop"] is not None:
+                        description = tx["shop"].get("name", "Unknown shop").title()
+                    
+                    # Parse transactionDate with full time precision
+                    # Example format: "2025-03-11T00:00:00.000+0100"
+                    if "transactionDate" not in tx or not tx["transactionDate"]:
+                        logger.warning(f"Missing transactionDate in transaction: {tx}")
+                        continue  # Skip transactions without a date
+                    
+                    # Replace Z with +00:00 if present, otherwise keep the timezone info
+                    date_str = tx["transactionDate"]
+                    if date_str.endswith('Z'):
+                        date_str = date_str[:-1] + '+00:00'
+                    
+                    # Handle different timezone formats
+                    if '+' in date_str and len(date_str.split('+')[1]) == 4:
+                        # Convert +0100 format to +01:00 format
+                        timezone_part = date_str.split('+')[1]
+                        hours = timezone_part[:2]
+                        minutes = timezone_part[2:]
+                        date_str = date_str.split('+')[0] + '+' + hours + ':' + minutes
+                    
+                    transaction_date = datetime.fromisoformat(date_str)
+                    
+                    # Get amount safely
+                    amount = 0.0
+                    if "amount" in tx and tx["amount"] is not None:
+                        amount = float(tx["amount"].get("amount", 0.0))
+                    
                     transaction = Transaction(
-                        date=datetime.fromisoformat(tx["transactionDate"].replace("Z", "+00:00")),
-                        description=tx["shop"]["name"].title(),
-                        category=tx["humanCategory"]["name"],
-                        amount=float(tx["amount"]["amount"]),
+                        date=transaction_date,
+                        description=description,
+                        category=category,
+                        amount=amount,
                         source="virtual_card"
                     )
                     transactions.append(transaction)
+                    
                 except Exception as e:
                     logger.warning(f"Failed to process virtual card transaction: {str(e)}")
+                    logger.debug(f"Problematic transaction data: {tx}")
                     continue
         except Exception as e:
             logger.error(f"Error processing virtual card transactions: {str(e)}")
@@ -91,20 +130,71 @@ class BankAccountTransactionHandler(ResponseHandler):
         try:
             for tx in response_data.get("accountTransactions", []):
                 try:
-                    # extract balance from the transaction
-                    balance = float(tx.get("balance", {}).get("accountingBalance", {}).get("amount", 0))
+                    # Check if this is an account balance entry rather than a transaction
+                    # Account balance entries have 'contract' and 'account' but no transaction data
+                    if "contract" in tx and "account" in tx and "valueDate" not in tx:
+                        # This is an account balance entry, not a transaction - silently skip
+                        continue
+                    
+                    # Parse valueDate with full time precision
+                    # Example format: "2025-03-11T00:00:00.000+0100"
+                    if "valueDate" not in tx or not tx["valueDate"]:
+                        logger.warning(f"Missing valueDate in what appears to be a transaction: {tx}")
+                        continue  # Skip transactions without a date
+                    
+                    # Replace Z with +00:00 if present, otherwise keep the timezone info
+                    date_str = tx["valueDate"]
+                    if date_str.endswith('Z'):
+                        date_str = date_str[:-1] + '+00:00'
+                    
+                    # Handle different timezone formats
+                    if '+' in date_str and len(date_str.split('+')[1]) == 4:
+                        # Convert +0100 format to +01:00 format
+                        timezone_part = date_str.split('+')[1]
+                        hours = timezone_part[:2]
+                        minutes = timezone_part[2:]
+                        date_str = date_str.split('+')[0] + '+' + hours + ':' + minutes
+                    
+                    transaction_date = datetime.fromisoformat(date_str)
+                    
+                    # Get description safely
+                    description = tx.get("humanConceptName", "").strip()
+                    if not description:
+                        description = "Unknown transaction"
+                    
+                    # Get category name or use default if missing
+                    category = "Uncategorized"
+                    if "humanCategory" in tx and tx["humanCategory"] is not None:
+                        category = tx["humanCategory"].get("name", "Uncategorized")
+                    
+                    # Get amount safely
+                    amount = 0.0
+                    if "amount" in tx and tx["amount"] is not None:
+                        amount = float(tx["amount"].get("amount", 0.0))
+                    
+                    # Get balance safely
+                    balance = 0.0
+                    if "balance" in tx and tx["balance"] is not None:
+                        balance_obj = tx["balance"].get("accountingBalance", {})
+                        if balance_obj and "amount" in balance_obj:
+                            balance = float(balance_obj.get("amount", 0.0))
+                    
+                    # Get more info safely
+                    more_info = tx.get("humanExtendedConceptName", "").strip()
                     
                     transaction = Transaction(
-                        date=datetime.fromisoformat(tx["transactionDate"].replace("Z", "+00:00")),
-                        description=tx.get("humanConceptName", "").strip(),
-                        category=tx.get("humanCategory", {}).get("name", "Uncategorized"),
-                        amount=float(tx["amount"]["amount"]),
+                        date=transaction_date,
+                        description=description,
+                        category=category,
+                        amount=amount,
                         source="bank_account",
-                        balance=balance
+                        balance=balance,
+                        more_info=more_info
                     )
                     transactions.append(transaction)
                 except Exception as e:
                     logger.warning(f"Failed to process bank account transaction: {e}")
+                    logger.debug(f"Problematic transaction data: {tx}")
                     continue
         except Exception as e:
             logger.error(f"Error processing bank account transactions: {e}")
@@ -395,12 +485,13 @@ class BBVAScraperImproved:
                     with open(filepath, 'w', newline='', encoding='utf-8') as f:
                         import csv
                         writer = csv.writer(f)
-                        writer.writerow(['date', 'description', 'category', 'amount', 'balance'])
+                        writer.writerow(['date', 'description', 'more_info', 'category', 'amount', 'balance'])
                         
                         for tx in account_transactions:
                             writer.writerow([
                                 tx.date.strftime("%Y-%m-%d %H:%M:%S"),
                                 tx.description,
+                                tx.more_info,
                                 tx.category,
                                 tx.amount,
                                 tx.balance
@@ -432,15 +523,14 @@ class BBVAScraperImproved:
                     with open(filepath, 'w', newline='', encoding='utf-8') as f:
                         import csv
                         writer = csv.writer(f)
-                        writer.writerow(['date', 'description', 'category', 'amount', 'balance'])
+                        writer.writerow(['date', 'description', 'category', 'amount'])
                         
                         for tx in card_transactions:
                             writer.writerow([
                                 tx.date.strftime("%Y-%m-%d %H:%M:%S"),
                                 tx.description,
                                 tx.category,
-                                tx.amount,
-                                ""  # Empty balance for virtual card transactions
+                                tx.amount
                             ])
                     
                     logger.info(f"Successfully exported virtual card transactions to {filename}")

@@ -83,6 +83,9 @@ class TransactionIngester:
         if pd.isna(description):
             description = "No description"
         
+        # Convert description to lowercase
+        description = description.lower()
+        
         return {
             "uuid": self.create_transaction_hash(row),
             "account_id": account_id,
@@ -109,7 +112,7 @@ class TransactionIngester:
             account_id = self.get_account(account_number, bank_id, account_id)
             
             # Read CSV file
-            df = pd.read_csv(csv_path, sep=';')
+            df = pd.read_csv(csv_path, sep=',')
             
             # Map Spanish column names to English based on bank
             if 'Fecha del movimiento' in df.columns:  # Ruralvia virtual card format
@@ -133,7 +136,10 @@ class TransactionIngester:
                     'IMPORTE EUR': 'amount',
                     'SALDO': 'balance'
                 }
-            else:  # BBVA format
+            elif 'more_info' in df.columns:  # BBVA format with more_info column
+                # BBVA columns are already in English, no need to rename
+                column_mapping = {}
+            else:  # Default BBVA format or other formats
                 column_mapping = {
                     'Fecha': 'date',
                     'Concepto': 'description',
@@ -141,10 +147,12 @@ class TransactionIngester:
                     'Disponible': 'balance'
                 }
             
-            df = df.rename(columns=column_mapping)
+            # Only rename columns if there's a mapping
+            if column_mapping:
+                df = df.rename(columns=column_mapping)
             
-            # Convert Spanish date format (DD/MM/YYYY) to datetime
-            df['date'] = pd.to_datetime(df['date'], format='%d/%m/%Y')
+            # Convert date format to datetime - handle ISO format dates
+            df['date'] = pd.to_datetime(df['date'])
             
             # For virtual cards, combine Concepto and Comercio for better description
             if 'merchant' in df.columns:
@@ -155,19 +163,41 @@ class TransactionIngester:
                 )
                 df = df.drop('merchant', axis=1)
             
+            # For BBVA transactions, handle special description concatenation
+            if 'more_info' in df.columns:
+                # List of values to exclude from more_info
+                excluded_info = ["PAGO CON TARJETA", ""]
+                
+                # Combine description and more_info unless more_info is in excluded list
+                def combine_descriptions(row):
+                    desc = row['description'] if not pd.isna(row['description']) else ""
+                    more = row['more_info'] if not pd.isna(row['more_info']) else ""
+                    
+                    # Only append more_info if it's not in excluded list
+                    if more.strip() and more.strip() not in excluded_info:
+                        combined = f"{desc.strip()} {more.strip()}".strip().lower()
+                    else:
+                        combined = desc.strip().lower()
+                    
+                    return combined if combined else "No description"
+                
+                df['description'] = df.apply(combine_descriptions, axis=1)
+                
+                # Remove the more_info column as we've combined it with description
+                df = df.drop('more_info', axis=1)
+            
             # Replace any NaN values with appropriate defaults
             df['description'] = df['description'].fillna("No description")
             
-            # Convert Spanish number format (comma as decimal separator, dots as thousand separators) to float
-            def convert_spanish_number(x):
+            # Convert number values to float
+            def convert_number(x):
                 if pd.isna(x):
                     return 0.0
-                # Remove thousand separators (dots) and replace decimal separator (comma) with dot
-                return float(str(x).replace('.', '').replace(',', '.'))
+                return float(x)
             
-            df['amount'] = df['amount'].apply(convert_spanish_number)
+            df['amount'] = df['amount'].apply(convert_number)
             if 'balance' in df.columns:
-                df['balance'] = df['balance'].apply(convert_spanish_number)
+                df['balance'] = df['balance'].apply(convert_number)
             
             if df.empty:
                 self.logger.info("No transactions to process")
