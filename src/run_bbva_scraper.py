@@ -3,7 +3,7 @@ import os
 import signal
 import sys
 import time
-from scrapers.bbva_scraper_improved import BBVAScraperImproved
+from scrapers.bbva_scraper import BBVAScraperImproved
 from dotenv import load_dotenv
 
 # Load environment variables
