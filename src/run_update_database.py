@@ -41,9 +41,22 @@ def get_latest_files_by_bank(exports_dir):
     # Process all CSV files
     for file_path in exports_path.glob("*.csv"):
         filename = file_path.name
-        timestamp_str = filename.split("_")[0]
         try:
-            timestamp = datetime.strptime(timestamp_str, "%Y%m%d")
+            # Extract both date and time from filename
+            parts = filename.split("_")
+            if len(parts) >= 2:
+                date_str = parts[0]
+                time_str = parts[1]
+                try:
+                    # Parse date and time together
+                    timestamp = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+                except ValueError:
+                    # Fallback to date only if time parsing fails
+                    timestamp = datetime.strptime(date_str, "%Y%m%d")
+            else:
+                # Fallback for files without time component
+                timestamp_str = filename.split("_")[0]
+                timestamp = datetime.strptime(timestamp_str, "%Y%m%d")
             
             # Extract bank name from filename
             if "bbva" in filename.lower():
@@ -226,18 +239,13 @@ def get_caixa_account_config(account_name):
 def create_temp_csv_for_account(account_transactions, account_name):
     """Create a temporary CSV file for a specific account"""
     
-    # Create temporary file
-    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    # Create a temporary file path
+    temp_file_path = tempfile.mktemp(suffix='.csv')
     
-    # Write header
-    temp_file.write("date,description,category,amount,account\n")
+    # Use pandas to write the CSV with proper quoting to handle commas in fields
+    account_transactions.to_csv(temp_file_path, index=False, quoting=1)  # quoting=1 means QUOTE_ALL
     
-    # Write transactions for this account
-    for _, transaction in account_transactions.iterrows():
-        temp_file.write(f"{transaction['date']},{transaction['description']},{transaction['category']},{transaction['amount']},{transaction['account']}\n")
-    
-    temp_file.close()
-    return temp_file.name
+    return temp_file_path
 
 def process_account_files():
     """Process all account transaction files"""
