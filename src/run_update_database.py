@@ -1,5 +1,7 @@
 import os
 import logging
+import pandas as pd
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from db.transaction_ingester import TransactionIngester
@@ -48,10 +50,26 @@ def get_latest_files_by_bank(exports_dir):
                 bank = "bbva"
             elif "ruralvia" in filename.lower():
                 bank = "ruralvia"
+            elif "caixa" in filename.lower():
+                bank = "caixa"
             else:
                 continue
             
-            # Determine account type
+            # Handle Caixa differently - all accounts in one file
+            if bank == "caixa":
+                # For Caixa, we'll process the file once and handle multiple accounts within it
+                key = f"{bank}_all_accounts"
+                if key not in latest_files or timestamp > latest_files[key]["timestamp"]:
+                    latest_files[key] = {
+                        "file": str(file_path),
+                        "timestamp": timestamp,
+                        "filename": filename,
+                        "bank": bank,
+                        "account_type": "all_accounts"
+                    }
+                continue
+            
+            # Determine account type for other banks
             if "virtual_card" in filename.lower() or "tarjeta_virtual" in filename.lower():
                 account_type = "virtual"
             else:
@@ -115,7 +133,111 @@ def get_account_config(bank, file_path):
                 "account_number": os.getenv("SANTANDER_ACCOUNT_NUMBER_TYPE_BANK_ID"),
                 "account_id": int(os.getenv("SANTANDER_ACCOUNT_ID_TYPE_BANK_ID")),
             }
+    elif bank == "caixa":
+        # For Caixa, we need to handle multiple accounts in one file
+        # This will be handled separately in process_caixa_transactions
+        return None
     return None
+
+def process_caixa_transactions(csv_path):
+    """Process Caixa transactions by grouping them by account and processing each separately"""
+    logger = logging.getLogger(__name__)
+    
+    try:
+        # Read the CSV file
+        df = pd.read_csv(csv_path)
+        
+        # Group transactions by account
+        account_groups = df.groupby('account')
+        
+        # Initialize ingester
+        ingester = TransactionIngester()
+        
+        success_count = 0
+        total_accounts = len(account_groups)
+        
+        logger.info(f"Processing Caixa transactions for {total_accounts} accounts")
+        
+        for account_name, account_transactions in account_groups:
+            try:
+                # Get account configuration based on account name
+                account_config = get_caixa_account_config(account_name)
+                if not account_config:
+                    logger.warning(f"No account configuration found for {account_name}")
+                    continue
+                
+                # Create a temporary CSV file for this account
+                temp_csv_path = create_temp_csv_for_account(account_transactions, account_name)
+                
+                logger.info(f"Processing {account_name} ({len(account_transactions)} transactions)")
+                
+                # Ingest transactions for this account
+                ingester.ingest_transactions(
+                    csv_path=temp_csv_path,
+                    account_number=account_config["account_number"],
+                    bank_id=account_config["bank_id"],
+                    account_id=account_config["account_id"]
+                )
+                
+                logger.info(f"Successfully processed {account_name}")
+                success_count += 1
+                
+                # Clean up temporary file
+                os.remove(temp_csv_path)
+                
+            except Exception as e:
+                logger.error(f"Error processing account {account_name}: {str(e)}")
+        
+        logger.info(f"Processed {success_count} out of {total_accounts} Caixa accounts successfully")
+        return success_count
+        
+    except Exception as e:
+        logger.error(f"Error reading Caixa CSV file: {str(e)}")
+        raise
+
+def get_caixa_account_config(account_name):
+    """Get Caixa account configuration based on account name from CSV"""
+    # Map account names from CSV to environment variables
+    account_mapping = {
+        "Cuenta 1433": {
+            "bank_id": int(os.getenv("CAIXA_BANK_ID")),
+            "account_number": os.getenv("CAIXA_ACCOUNT_NUMBER_TYPE_BANK_CUENTA_1433"),
+            "account_id": int(os.getenv("CAIXA_ACCOUNT_ID_TYPE_BANK_CUENTA_1433")),
+        },
+        "MyCard 3363": {
+            "bank_id": int(os.getenv("CAIXA_BANK_ID")),
+            "account_number": os.getenv("CAIXA_ACCOUNT_NUMBER_TYPE_CARD_DEN_3363"),
+            "account_id": int(os.getenv("CAIXA_ACCOUNT_ID_TYPE_CARD_DEN_3363")),
+        },
+        "MyCard 5246": {
+            "bank_id": int(os.getenv("CAIXA_BANK_ID")),
+            "account_number": os.getenv("CAIXA_ACCOUNT_NUMBER_TYPE_CARD_PAU_5246"),
+            "account_id": int(os.getenv("CAIXA_ACCOUNT_ID_TYPE_CARD_PAU_5246")),
+        },
+        "CYBERTARJETA 2526": {
+            "bank_id": int(os.getenv("CAIXA_BANK_ID")),
+            "account_number": os.getenv("CAIXA_ACCOUNT_NUMBER_TYPE_CARD_CYBER_2526"),
+            "account_id": int(os.getenv("CAIXA_ACCOUNT_ID_TYPE_CARD_CYBER_2526")),
+        }
+    }
+    
+    return account_mapping.get(account_name)
+
+def create_temp_csv_for_account(account_transactions, account_name):
+    """Create a temporary CSV file for a specific account"""
+    
+    # Create temporary file
+    temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False)
+    
+    # Write header
+    temp_file.write("date,description,category,amount,account\n")
+    
+    # Write transactions for this account
+    for _, transaction in account_transactions.iterrows():
+        temp_file.write(f"{transaction['date']},{transaction['description']},{transaction['category']},{transaction['amount']},{transaction['account']}\n")
+    
+    temp_file.close()
+    return temp_file.name
 
 def process_account_files():
     """Process all account transaction files"""
@@ -131,6 +253,14 @@ def process_account_files():
     
     for bank_account_key, file_info in latest_files.items():
         try:
+            # Handle Caixa files differently
+            if file_info["bank"] == "caixa":
+                logger.info(f"Processing Caixa file: {file_info['filename']}")
+                caixa_success_count = process_caixa_transactions(file_info["file"])
+                success_count += 1 if caixa_success_count > 0 else 0
+                continue
+            
+            # Handle other banks as before
             account_config = get_account_config(file_info["bank"], file_info["file"])
             if not account_config:
                 logger.warning(f"No account configuration found for {file_info['filename']}")
