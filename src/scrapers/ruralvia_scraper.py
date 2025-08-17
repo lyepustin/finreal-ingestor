@@ -70,6 +70,16 @@ class RuralviaScraper:
     def login(self) -> bool:
         """Login to Ruralvia banking portal"""
         try:
+            self.driver.switch_to.new_window('tab')
+            
+            # Create a new tab and switch to it
+            logger.info("Creating new tab")
+            self.driver.switch_to.new_window('tab')
+            
+            # Get the current window handle (this will be our new tab)
+            current_handle = self.driver.current_window_handle
+            logger.info(f"New tab created with handle: {current_handle}")
+            
             logger.info(f"Navigating to {self.base_url}")
             self.driver.get(self.base_url)
 
