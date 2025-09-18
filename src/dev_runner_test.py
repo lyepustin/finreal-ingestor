@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -50,7 +51,11 @@ def main():
         edge_options.use_chromium = True
         edge_options.add_experimental_option("debuggerAddress", debugger_address)
         
-        driver = webdriver.Edge(options=edge_options)
+        # Use local Edge driver
+        edge_driver_path = os.path.join(os.path.dirname(__file__), "edge_driver", "msedgedriver.exe")
+        service = Service(executable_path=edge_driver_path)
+        
+        driver = webdriver.Edge(service=service, options=edge_options)
 
         logger.info(f"Successfully connected to the browser. Initial tab: {driver.title}")
 

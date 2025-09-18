@@ -3,6 +3,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service
 from selenium.common.exceptions import TimeoutException
 import logging
 import os
@@ -364,11 +365,15 @@ class BBVAScraperImproved:
         edge_options.add_argument("--start-maximized")
         edge_options.use_chromium = True
         
+        # Use local Edge driver
+        edge_driver_path = os.path.join(os.path.dirname(__file__), "..", "edge_driver", "msedgedriver.exe")
+        service = Service(executable_path=edge_driver_path)
+        
         if self.debugger_address:
             logger.info(f"Connecting to existing Edge instance at {self.debugger_address}")
             edge_options.add_experimental_option("debuggerAddress", self.debugger_address)
         
-        self.driver = webdriver.Edge(options=edge_options)
+        self.driver = webdriver.Edge(service=service, options=edge_options)
         
         # Create a new tab and switch to it
         logger.info("Creating new tab")

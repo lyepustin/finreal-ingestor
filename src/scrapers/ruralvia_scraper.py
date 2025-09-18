@@ -52,14 +52,18 @@ class RuralviaScraper:
         edge_options.add_argument("--start-maximized")  # Start with maximized window
         edge_options.use_chromium = True
         
+        # Use local Edge driver
+        edge_driver_path = os.path.join(os.path.dirname(__file__), "..", "edge_driver", "msedgedriver.exe")
+        service = Service(executable_path=edge_driver_path)
+        
         if self.debugger_address:
             logger.info(f"Connecting to existing Edge instance at {self.debugger_address}")
             # This is the key change - use debuggerAddress in experimental options instead of Remote
             edge_options.add_experimental_option("debuggerAddress", self.debugger_address)
-            self.driver = webdriver.Edge(options=edge_options)
+            self.driver = webdriver.Edge(service=service, options=edge_options)
         else:
             logger.info("Creating new Edge WebDriver instance")
-            self.driver = webdriver.Edge(options=edge_options)
+            self.driver = webdriver.Edge(service=service, options=edge_options)
         
         # Wait for the body to be present
         WebDriverWait(self.driver, 10).until(
