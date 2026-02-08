@@ -2,7 +2,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.common.exceptions import TimeoutException
 import logging
 import os
@@ -358,29 +359,33 @@ class BBVAScraperImproved:
         ws.send(json.dumps({"id": 2, "method": "Network.setBypassServiceWorker", "params": {"bypass": True}}))
 
     def setup_driver(self):
-        """Initialize the Edge WebDriver and WebSocket connection"""
-        logger.info("Setting up Edge WebDriver")
-        edge_options = Options()
-        edge_options.add_argument("--start-maximized")
-        edge_options.use_chromium = True
-        
+        """Initialize the WebDriver and WebSocket connection"""
         if self.debugger_address:
-            logger.info(f"Connecting to existing Edge instance at {self.debugger_address}")
-            edge_options.add_experimental_option("debuggerAddress", self.debugger_address)
+            logger.info("Setting up Chrome WebDriver (connecting to existing browser)")
+            chrome_options = ChromeOptions()
+            chrome_options.add_argument("--start-maximized")
+            chrome_options.add_argument("--remote-allow-origins=*")
+            chrome_options.add_experimental_option("debuggerAddress", self.debugger_address)
+            self.driver = webdriver.Chrome(options=chrome_options)
+            logger.info(f"Connected to existing browser at {self.debugger_address}")
+        else:
+            logger.info("Setting up Edge WebDriver")
+            edge_options = EdgeOptions()
+            edge_options.add_argument("--start-maximized")
+            edge_options.use_chromium = True
+            self.driver = webdriver.Edge(options=edge_options)
         
-        self.driver = webdriver.Edge(options=edge_options)
-        
-        # Create a new tab and switch to it
+        # Crear nueva pestaña y navegar al portal (igual que Caixa)
         logger.info("Creating new tab")
         self.driver.switch_to.new_window('tab')
-        
-        # Get the current window handle (this will be our new tab)
         current_handle = self.driver.current_window_handle
         logger.info(f"New tab created with handle: {current_handle}")
-        
+        logger.info(f"Navigating to {self.base_url}")
+        self.driver.get(self.base_url)
+
         # Initialize WebSocket connection
         try:
-            debugger_url = "http://localhost:59222/json"
+            debugger_url = f"http://{self.debugger_address}/json" if self.debugger_address else "http://localhost:59222/json"
             targets = requests.get(debugger_url).json()
             
             # Find the page/tab that matches our current window handle
@@ -420,7 +425,7 @@ class BBVAScraperImproved:
         WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        logger.info("Edge WebDriver and WebSocket setup completed")
+        logger.info("WebDriver and WebSocket setup completed")
 
     def get_virtual_card_transactions(self) -> List[Transaction]:
         """Get the list of virtual card transactions captured by the WebSocket"""
@@ -654,11 +659,8 @@ class BBVAScraperImproved:
             return False
 
     def login(self) -> bool:
-        """Login to BBVA banking portal"""
+        """Login to BBVA banking portal (ya estamos en una pestaña con base_url desde setup_driver)"""
         try:
-            logger.info(f"Navigating to {self.base_url}")
-            self.driver.get(self.base_url)
-
             # Wait for either username field or password-only form
             logger.info("Checking login form type")
             try:

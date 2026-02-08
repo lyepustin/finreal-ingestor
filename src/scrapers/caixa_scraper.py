@@ -2,7 +2,8 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 import logging
 import os
@@ -53,6 +54,7 @@ class CaixaScraper:
         self.base_url = str(os.getenv("CAIXA_BASE_URL"))
         self.username = str(os.getenv("CAIXA_USERNAME"))
         self.password = str(os.getenv("CAIXA_PASSWORD"))
+        self.ver_mas_pages = int(os.getenv("CAIXA_VER_MAS_PAGES", "2"))
         self.driver = None
         self.debugger_address = debugger_address
         self.ws = None
@@ -65,21 +67,23 @@ class CaixaScraper:
         self.transactions: List[Transaction] = []
 
     def setup_driver(self):
-        logger.info("Setting up Edge WebDriver")
-        edge_options = Options()
-        edge_options.use_chromium = True
-        edge_options.add_argument("--remote-allow-origins=*")
         if self.debugger_address:
-            logger.info(f"Connecting to existing Edge instance at {self.debugger_address}")
-            edge_options.add_experimental_option("debuggerAddress", self.debugger_address)
+            # Conectar a un navegador existente (Chrome/Chromium) vía remote debugging
+            logger.info("Setting up Chrome WebDriver (connecting to existing browser)")
+            chrome_options = ChromeOptions()
+            chrome_options.add_argument("--remote-allow-origins=*")
+            chrome_options.add_experimental_option("debuggerAddress", self.debugger_address)
+            self.driver = webdriver.Chrome(options=chrome_options)
+            logger.info(f"Connected to existing browser at {self.debugger_address}")
         else:
-            # To keep the browser open after the script finishes, you can detach it.
+            # Iniciar nueva instancia de Edge
+            logger.info("Setting up Edge WebDriver")
+            edge_options = EdgeOptions()
+            edge_options.use_chromium = True
+            edge_options.add_argument("--remote-allow-origins=*")
             edge_options.add_experimental_option("detach", True)
-            # A new remote debugging port will be assigned.
             edge_options.add_argument("--remote-debugging-port=0")
-
-        self.driver = webdriver.Edge(options=edge_options)
-        if not self.debugger_address:
+            self.driver = webdriver.Edge(options=edge_options)
             self.debugger_address = self.driver.capabilities['ms:edgeOptions']['debuggerAddress']
             logger.info(f"Started new Edge instance with debugger address: {self.debugger_address}")
 
@@ -250,15 +254,43 @@ class CaixaScraper:
             ultimos_movimientos.click()
             
             logger.info("Successfully navigated to transactions page")
-            
-            # Step 9: Click "Ver más movimientos" to load additional transactions
+            time.sleep(1)
+
+            # Step 8: Cambiar filtro Período de "Febrero" (mes actual) a "6 meses" para cargar más movimientos
+            try:
+                logger.info("Opening period filter (Período)...")
+                period_filter_label = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'filter_title_label') and contains(.,'Período')]"))
+                )
+                period_data_big = period_filter_label.find_element(By.XPATH, "./following-sibling::div[contains(@class,'filter_title_data_big')]")
+                self.driver.execute_script("arguments[0].scrollIntoView(true);", period_data_big)
+                time.sleep(0.3)
+                period_data_big.click()
+                logger.info("Period filter opened, selecting '6 meses'...")
+                seis_meses = wait.until(
+                    EC.element_to_be_clickable((By.ID, "filtro_periodo_3"))
+                )
+                seis_meses.click()
+                time.sleep(0.5)
+                logger.info("Clicking 'Filtrar' to apply period filter...")
+                filtrar_btn = wait.until(
+                    EC.element_to_be_clickable((By.ID, "filtro_enlaceAceptar"))
+                )
+                filtrar_btn.click()
+                time.sleep(2)  # Esperar a que la página recargue los movimientos con el nuevo período
+                logger.info("Period set to 6 months and filter applied")
+            except (TimeoutException, NoSuchElementException) as e:
+                logger.warning(f"Could not set period filter to 6 months: {e}. Continuing with default period.")
+            except Exception as e:
+                logger.warning(f"Error setting period filter: {e}. Continuing with default period.")
+
+            # Step 9: Click "Ver más movimientos" N veces para cargar más transacciones (N = CAIXA_VER_MAS_PAGES)
             logger.info("Looking for 'Ver más movimientos' button...")
             
             # Scroll down to ensure the button is visible
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(1)
             
-            # Try to find the button using the pagination container (most reliable method)
             try:
                 pagination_container = wait.until(
                     EC.presence_of_element_located((By.ID, "paginacionAcumulativa01"))
@@ -267,7 +299,6 @@ class CaixaScraper:
                 
                 self.driver.switch_to.default_content()
                 
-                # Now look for the Inferior iframe first (this is the missing step!)
                 logger.info("Looking for Inferior iframe...")
                 inferior_iframe = wait.until(
                     EC.presence_of_element_located((By.XPATH, "//iframe[@name='Inferior' or @id='Inferior' or @title='Inferior']"))
@@ -275,7 +306,6 @@ class CaixaScraper:
                 self.driver.switch_to.frame(inferior_iframe)
                 logger.info("Switched to Inferior iframe")
                 
-                # Now look for the Cos iframe inside Inferior
                 logger.info("Looking for Cos iframe inside Inferior...")
                 cos_iframe = wait.until(
                     EC.presence_of_element_located((By.XPATH, "//iframe[@name='Cos' or @title='Cuerpo']"))
@@ -283,23 +313,26 @@ class CaixaScraper:
                 self.driver.switch_to.frame(cos_iframe)
                 logger.info("Switched to Cos iframe")
                 
-                pagination_container = self.driver.find_element(By.ID, "paginacionAcumulativa01")
-                logger.info("Found pagination container")
-                
-                ver_mas_button = pagination_container.find_element(By.CLASS_NAME, "c-pagination__custom__pageListCumulative__inner__link")
-                logger.info("Found 'Ver más movimientos' button. Clicking it...")
-                
-                # Scroll the button into view and click
-                self.driver.execute_script("arguments[0].scrollIntoView(true);", ver_mas_button)
-                ver_mas_button.click()
-                time.sleep(1)
-                
-                logger.info("Successfully clicked 'Ver más movimientos' button")
+                for page_num in range(self.ver_mas_pages):
+                    try:
+                        pagination_container = self.driver.find_element(By.ID, "paginacionAcumulativa01")
+                        ver_mas_button = pagination_container.find_element(By.CLASS_NAME, "c-pagination__custom__pageListCumulative__inner__link")
+                        logger.info(f"Clicking 'Ver más movimientos' ({page_num + 1}/{self.ver_mas_pages})...")
+                        self.driver.execute_script("arguments[0].scrollIntoView(true);", ver_mas_button)
+                        ver_mas_button.click()
+                        time.sleep(1)
+                    except NoSuchElementException:
+                        logger.warning("'Ver más movimientos' button not found - no more pages or structure changed")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Error clicking 'Ver más movimientos' (page {page_num + 1}): {e}")
+                        break
+                logger.info("Finished loading additional transaction pages")
                     
             except NoSuchElementException:
-                logger.warning("'Ver más movimientos' button not found - continuing with available transactions")
+                logger.warning("Pagination container not found - continuing with available transactions")
             except Exception as e:
-                logger.warning(f"Error clicking 'Ver más movimientos' button: {e}")
+                logger.warning(f"Error setting up pagination: {e}")
             
             logger.info("Finished loading transactions, ready for extraction")
 

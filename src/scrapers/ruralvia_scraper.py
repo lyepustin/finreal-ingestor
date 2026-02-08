@@ -3,11 +3,11 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.edge.service import Service
-from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 from selenium.webdriver import Remote
 from selenium.common.exceptions import TimeoutException
 from datetime import datetime
-import pandas as pd
 import logging
 import sys
 import time
@@ -46,43 +46,40 @@ class RuralviaScraper:
         self.debugger_address = debugger_address # Store debugger address
 
     def setup_driver(self):
-        """Initialize the Edge WebDriver with appropriate options"""
-        logger.info("Setting up Edge WebDriver")
-        edge_options = Options()
-        edge_options.add_argument("--start-maximized")  # Start with maximized window
-        edge_options.use_chromium = True
-        
+        """Initialize the WebDriver with appropriate options"""
         if self.debugger_address:
-            logger.info(f"Connecting to existing Edge instance at {self.debugger_address}")
-            # This is the key change - use debuggerAddress in experimental options instead of Remote
-            edge_options.add_experimental_option("debuggerAddress", self.debugger_address)
-            self.driver = webdriver.Edge(options=edge_options)
+            logger.info("Setting up Chrome WebDriver (connecting to existing browser)")
+            chrome_options = ChromeOptions()
+            chrome_options.add_argument("--start-maximized")
+            chrome_options.add_argument("--remote-allow-origins=*")
+            chrome_options.add_experimental_option("debuggerAddress", self.debugger_address)
+            self.driver = webdriver.Chrome(options=chrome_options)
+            logger.info(f"Connected to existing browser at {self.debugger_address}")
         else:
-            logger.info("Creating new Edge WebDriver instance")
+            logger.info("Setting up Edge WebDriver")
+            edge_options = EdgeOptions()
+            edge_options.add_argument("--start-maximized")
+            edge_options.use_chromium = True
             self.driver = webdriver.Edge(options=edge_options)
+            logger.info("Created new Edge WebDriver instance")
+
+        # Crear nueva pestaña y navegar al portal (igual que Caixa)
+        logger.info("Creating new tab")
+        self.driver.switch_to.new_window('tab')
+        current_handle = self.driver.current_window_handle
+        logger.info(f"New tab created with handle: {current_handle}")
+        logger.info(f"Navigating to {self.base_url}")
+        self.driver.get(self.base_url)
         
         # Wait for the body to be present
         WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
-        logger.info("Edge WebDriver setup completed")
+        logger.info("WebDriver setup completed")
 
     def login(self) -> bool:
-        """Login to Ruralvia banking portal"""
+        """Login to Ruralvia banking portal (ya estamos en una pestaña con base_url desde setup_driver)"""
         try:
-            self.driver.switch_to.new_window('tab')
-            
-            # Create a new tab and switch to it
-            logger.info("Creating new tab")
-            self.driver.switch_to.new_window('tab')
-            
-            # Get the current window handle (this will be our new tab)
-            current_handle = self.driver.current_window_handle
-            logger.info(f"New tab created with handle: {current_handle}")
-            
-            logger.info(f"Navigating to {self.base_url}")
-            self.driver.get(self.base_url)
-
             logger.info("Looking for username field")
             username_field = self.driver.find_element(By.NAME, "dniNie")
             logger.info("Looking for password field")
