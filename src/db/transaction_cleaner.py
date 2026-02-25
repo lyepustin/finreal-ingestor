@@ -249,3 +249,70 @@ class TransactionCleaner:
         except Exception as e:
             self.logger.error(f"Error deleting 2025 transactions and categories: {str(e)}")
             raise
+
+    def delete_transactions_after_march_2026(self) -> bool:
+        """Delete all transactions with operation_date > 2026-03-31 and their categories (legacy wrong-year data)."""
+        try:
+            account_ids = self.get_account_ids_for_user()
+            if not account_ids:
+                self.logger.info(f"No accounts found for user {self.user_id}")
+                return True
+
+            # Fecha mínima: todo lo estrictamente posterior a marzo 2026 (>= 2026-04-01)
+            from_date = "2026-04-01T00:00:00"
+
+            self.logger.info("Getting transaction IDs with operation_date >= 2026-04-01 (pagination)...")
+            all_transaction_ids = []
+            page = 0
+            page_size = 1000
+
+            while True:
+                self.logger.info(f"Fetching transaction IDs - page {page + 1}")
+                transactions = self.supabase.table("transactions")\
+                    .select("id")\
+                    .in_("account_id", account_ids)\
+                    .gte("operation_date", from_date)\
+                    .range(page * page_size, (page + 1) * page_size - 1)\
+                    .execute()
+
+                if not transactions.data:
+                    break
+
+                page_ids = [row["id"] for row in transactions.data]
+                all_transaction_ids.extend(page_ids)
+                self.logger.info(f"Found {len(page_ids)} transactions on page {page + 1}")
+
+                if len(transactions.data) < page_size:
+                    break
+                page += 1
+
+            if not all_transaction_ids:
+                self.logger.info("No transactions found with operation_date >= 2026-04-01")
+                return True
+
+            self.logger.info(f"Found total of {len(all_transaction_ids)} transactions to delete (and their categories)")
+
+            # Borrar categorías en batches
+            batch_size = 1000
+            for i in range(0, len(all_transaction_ids), batch_size):
+                batch = all_transaction_ids[i:i + batch_size]
+                self.supabase.table("transaction_categories")\
+                    .delete()\
+                    .in_("transaction_id", batch)\
+                    .execute()
+                self.logger.info(f"Deleted categories for {min(i + batch_size, len(all_transaction_ids))}/{len(all_transaction_ids)} transactions")
+
+            # Borrar transacciones
+            self.logger.info("Deleting transactions with operation_date >= 2026-04-01...")
+            self.supabase.table("transactions")\
+                .delete()\
+                .in_("account_id", account_ids)\
+                .gte("operation_date", from_date)\
+                .execute()
+
+            self.logger.info("Successfully deleted legacy transactions (after March 2026) and their categories")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error deleting transactions after March 2026: {str(e)}")
+            raise

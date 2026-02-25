@@ -414,8 +414,16 @@ class CaixaScraper:
             }
             
             month = month_map.get(month_abbr, '01')
-            year = str(datetime.now().year)  # Use current year
-            
+            now = datetime.now()
+            year = now.year
+            # If parsed (month, day) would be in the future, use previous year
+            # e.g. today 2026-02-20 and "30 Dic" -> 2025-12-30
+            try:
+                parsed = datetime(year, int(month), int(day))
+                if parsed > now:
+                    year = year - 1
+            except ValueError:
+                pass
             return f"{year}-{month}-{day} 00:00:00"
         
         # If no pattern matches, return today's date
